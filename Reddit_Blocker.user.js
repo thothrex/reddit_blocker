@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name        Reddit Blocker
-// @include     /^https?:\/\/([A-Za-z]{1,3}\.)?reddit(js)?\.com\/r\//
+// @include     /^https?://([A-Za-z]{1,3}\.)?reddit(js)?\.com/r/.*$/
 // @namespace   reddit_block
-// @version     3
-// @grant       GM_getValue
-// @grant       GM_setValue
-// @require     https://code.jquery.com/jquery-2.1.1.min.js
+// @version     4
+// @grant       GM.getValue
+// @grant       GM.setValue
+// @require     https://code.jquery.com/jquery-3.2.1.min.js
 // ==/UserScript==
 
 // --
@@ -18,7 +18,7 @@ var TogglableUserState = function ( statename, actionname, recoveryactionname,
     this.statename          = statename;
     this.actionname         = actionname;
     this.recoveryactionname = recoveryactionname;
-    this.mapname            = "" + this.statename + "_authors_map";
+    
     this.buttonclassname    = "" + this.actionname + "-button";
     this.buttonhtml
         = make_button_html(this.actionname, this.buttonclassname);
@@ -27,18 +27,20 @@ var TogglableUserState = function ( statename, actionname, recoveryactionname,
 
     this.comment_action          = comment_action;
     this.comment_recovery_action = comment_recovery_action;
-
-    this.user_is_toggled = _get_map(this.mapname);
 };
 
+TogglableUserState.prototype.init = async function ( statename ) {
+    this.mapname         = "" + this.statename + "_authors_map";
+    this.user_is_toggled = await _get_map(this.mapname);
+}
 
-TogglableUserState.prototype.toggle_action = function (author) {
-    var newmap = _add_author_to_map(author, this.mapname);
+TogglableUserState.prototype.toggle_action = async function (author) {
+    var newmap = await _add_author_to_map(author, this.mapname);
     this.user_is_toggled = newmap;
 };
 
-TogglableUserState.prototype.untoggle_action = function (author) {
-    var newmap = _remove_author_from_map(author, this.mapname);
+TogglableUserState.prototype.untoggle_action = async function (author) {
+    var newmap = await _remove_author_from_map(author, this.mapname);
     this.user_is_toggled = newmap;
 };
 
@@ -49,7 +51,8 @@ TogglableUserState.prototype.state_dependant_comment_action
 };
 
 TogglableUserState.prototype.swap_button_type = function (comment, prev_toggled) {
-    var $old_button = _$get_button_of_type_from_comment(this.buttonclassname, comment);
+    var $old_button
+        = _$get_button_of_type_from_comment(this.buttonclassname, comment);
     var author = get_author(comment);
 
     var $new_button
@@ -97,12 +100,16 @@ TogglableUserState.prototype.create_button = function (author) {
 
 // -- block
 
-function _create_blocked_state () {
-    return new TogglableUserState(
-        "blocked", "block", "unblock",
+async function _create_blocked_state () {
+    var statename = "blocked";
+    var NewState
+        = new TogglableUserState(
+        statename, "block", "unblock",
         _do_comment_block_action,
         _do_comment_unblock_action
     );
+    await NewState.init(statename);
+    return NewState;
 }
 
 function _do_comment_block_action (comment) {
@@ -196,18 +203,18 @@ function restore_author_name (comment) {
 // --
 
 function _set_map (mapname, new_map) {
-    GM_setValue(mapname, JSON.stringify(new_map) );
+    GM.setValue(mapname, JSON.stringify(new_map) );
 }
 
-function _add_author_to_map (author, mapname) {
-    var newmap = _get_map(mapname);
+async function _add_author_to_map (author, mapname) {
+    var newmap = await _get_map(mapname);
     newmap[author] = true;
     _set_map(mapname, newmap);
     return newmap;
 }
 
-function _remove_author_from_map (author, mapname) {
-    var newmap = _get_map(mapname);
+async function _remove_author_from_map (author, mapname) {
+    var newmap = await _get_map(mapname);
     delete newmap[author];
     _set_map(mapname, newmap);
     return newmap;
@@ -241,32 +248,46 @@ function _$get_comment_parent_table (comment) {
     return $(comment).parent();
 }
 
-function _get_map (mapname) {
-    return JSON.parse( GM_getValue(mapname, "{}") );
+// Returns the promise of a map
+// to allow for asynchronous structure
+async function _get_map (mapname) {
+    var map = JSON.parse(await GM.getValue(mapname, "{}"));
+    if (!map) {
+      //JSON.parse() should never return any value that type-casts to false, assume there is an 
+      //   error in the input string
+      var error_message
+        = 'Error! JSON.parse failed - '
+        + 'The stored value for "foo" is likely to be corrupted.';
+      console.warn(error_message);
+      throw error_message;
+    }
+    else {
+        return map;
+    }
 }
 
 //
 // -- END Utility Functions --
 //
 
-
-
 //
 // --- run on page load ---
 //
 
-// restore page's jQuery
 this.$ = this.jQuery = jQuery.noConflict(true);
-
-var blockedstate = _create_blocked_state();
-
-$("div.comment").each( function (index) {
-    insert_new_buttons(this, blockedstate);
-    blockedstate.state_dependant_comment_action(this);
-});
+_execute_reddit_blocker();
 
 
 // --- subroutines ---
+
+async function _execute_reddit_blocker () {
+    var blockedstate = await _create_blocked_state();
+
+    $("div.comment").each( function (index) {
+        insert_new_buttons(this, blockedstate);
+        blockedstate.state_dependant_comment_action(this);
+    });
+}
 
 function insert_new_buttons (comment, blockedstate) {
     var $button_list = $(comment).find("div.entry ul.buttons").first();
